@@ -26,3 +26,141 @@ set.seed(494)
 
 theme_set(theme_minimal())
 ```
+
+```{r}
+swingK <- read_csv("swingK.csv")
+swingK <- swingK %>% 
+  select(-...14)
+```
+
+```{r}
+Ksplit <- initial_split(swingK, strata = "b_k_percent")
+K_training <- training(Ksplit)
+K_testing <- testing(Ksplit)
+
+K_training <- K_training %>% 
+  select(-first_name, -last_name, -player_id, -year)
+```
+
+```{r}
+K_lasso_spec <- 
+  linear_reg() %>%
+  set_args(mixture = 1, penalty = 0) %>% ## mixture = 1 indicates Lasso, we'll choose penalty later
+  set_engine(engine = 'glmnet') %>% #note we are using a different engine
+  set_mode('regression') 
+
+# Recipe with standardization (!)
+data_rec <- recipe(b_k_percent  ~ ., data = K_training) %>%
+    step_nzv(all_predictors()) %>% # removes variables with the same value
+    step_novel(all_nominal_predictors()) %>% # important if you have rare categorical variables 
+    step_normalize(all_numeric_predictors()) %>%  # important standardization step for LASSO
+    step_dummy(all_nominal_predictors())  # creates indicator variables for categorical variables
+
+# Workflow (Recipe + Model)
+K_lasso_wf <- workflow() %>% 
+  add_recipe(data_rec) %>%
+  add_model(K_lasso_spec)
+
+# Fit Model
+K_lasso_fit <- K_lasso_wf %>% 
+  fit(data = K_training) # Fit to data
+```
+
+```{r}
+# Create CV folds
+data_cv10 <- vfold_cv(K_training, v = 10)
+
+# Lasso Model Spec with tune
+K_lasso_spec_tune <- 
+  linear_reg() %>%
+  set_args(mixture = 1, penalty = tune()) %>% ## mixture = 1 indicates Lasso
+  set_engine(engine = 'glmnet') %>% #note we are using a different engine
+  set_mode('regression') 
+
+# Workflow (Recipe + Model)
+K_lasso_wf_tune <- workflow() %>% 
+  add_recipe(data_rec) %>%
+  add_model(K_lasso_spec_tune) 
+
+# Tune Model (trying a variety of values of Lambda penalty)
+penalty_grid <- grid_regular(
+  penalty(range = c(-10, 3)), #log10 transformed 10^-5 to 10^3
+  levels = 30)
+
+tune_res <- tune_grid( # new function for tuning parameters
+  K_lasso_wf_tune, # workflow
+  resamples = data_cv10, # cv folds
+  metrics = metric_set(rmse, mae),
+  grid = penalty_grid # penalty grid defined above
+)
+
+# Visualize Model Evaluation Metrics from Tuning
+autoplot(tune_res) + theme_classic()
+
+# Summarize Model Evaluation Metrics (CV)
+collect_metrics(tune_res) %>%
+  filter(.metric == 'rmse') %>% # or choose mae
+  select(penalty, rmse = mean) 
+
+best_penalty <- select_best(tune_res, metric = 'rmse') # choose penalty value based on lowest mae or rmse
+
+# Fit Final Model
+K_final_wf <- finalize_workflow(K_lasso_wf_tune, best_penalty) # incorporates penalty value to workflow
+
+K_final_fit <- fit(K_final_wf, data = K_training)
+
+tidy(K_final_fit)
+
+
+Kpred <- predict(K_final_fit, new_data = K_testing)
+
+K_testing_lasso <- cbind(K_testing, Kpred)
+K_testing_lasso <- K_testing_lasso %>% 
+  select(last_name, first_name, b_k_percent, .pred)
+```
+
+```{r}
+K_lasso_explain <- 
+  explain_tidymodels(
+    model = K_final_fit,
+    data = K_testing %>% select(-b_k_percent), 
+    y = as.numeric(K_training$b_k_percent),
+    label = "lasso"
+  )
+```
+
+```{r}
+K_var_imp <- 
+  model_parts(
+    K_lasso_explain
+    )
+
+plot(K_var_imp)
+```
+```{r}
+K <- K_testing %>% filter(last_name == "Abreu" & year == 2020)
+
+#Pulls together the data needed for the break-down plot
+Abreu <- predict_parts(explainer = K_lasso_explain,
+                          new_observation = K,
+                          type = "break_down") #default
+Abreu_pp <- plot(Abreu, title = "Jose Abreu Prediction") + theme(plot.title = element_text(hjust = .5, size = 15, color = "black", face = "bold"))
+
+Abreu_pp
+```
+```{r}
+K2 <- K_testing %>% filter(last_name == "Murphy" & year == 2015)
+
+#Pulls together the data needed for the break-down plot
+Murphy <- predict_parts(explainer = K_lasso_explain,
+                          new_observation = K2,
+                          type = "break_down") #default
+Murphy_pp <- plot(Murphy, title = "Daniel Murphy Prediction") + theme(plot.title = element_text(hjust = .5, size = 15, color = "black", face = "bold"))
+
+Murphy_pp
+```
+
+
+
+
+
