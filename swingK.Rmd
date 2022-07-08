@@ -1,0 +1,28 @@
+---
+title: "swingK"
+author: "Will Moscato"
+date: '2022-07-08'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(readr)
+library(broom)
+library(ggplot2)
+library(tidymodels) 
+library(vip)
+library(stacks)
+library(DALEX)
+library(DALEXtra)
+library(themis)
+tidymodels_prefer()
+set.seed(494)
+
+theme_set(theme_minimal())
+```
